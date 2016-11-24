@@ -1,5 +1,6 @@
 #include "Calibration.h"
 #include "ui_Calibration.h"
+#include "calibrateExtrinsic.h"
 #include <boost/bind.hpp>
 
 #include <QImage>
@@ -7,25 +8,17 @@
 #include <opencv2/opencv.hpp>
 #include <sstream>
 
+#include <Eigen/Eigen>
+#include <Eigen/SVD>
+#include <Eigen/Dense>
+
 Calibration::Calibration(int argc,char** argv,QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::Calibration),
     updateWindowFlag(1)
 {
     ui->setupUi(this);
-    camera=new PointGreyCamera;
-    if(0!=camera->init())
-    {
-        return;
-    };
-
     ui->doubleSpinBoxAspectRatio->setVisible(false);
-
-
-    imgFun=boost::bind(&Calibration::imgThreadFun,this);
-    imgThread=boost::thread(imgFun);
-    connect(this,SIGNAL(updateRealtimeImage_()),this,SLOT(updateRealtimeImage()));
-
     viewer.reset (new pcl::visualization::PCLVisualizer ("viewer", false));
     ui->qvtkRealtimePointcloud->SetRenderWindow (viewer->getRenderWindow());
     viewer->setupInteractor (ui->qvtkRealtimePointcloud->GetInteractor (), ui->qvtkRealtimePointcloud->GetRenderWindow ());
@@ -42,6 +35,13 @@ Calibration::Calibration(int argc,char** argv,QWidget *parent) :
     viewer->addCoordinateSystem (1.0, "global");
     grabber.start();
 
+    camera=new PointGreyCamera;
+    if(0!=camera->init())
+    {
+        return;
+    };
+    imgFun=boost::bind(&Calibration::imgThreadFun,this);
+    imgThread=boost::thread(imgFun);
     connect(this,SIGNAL(updateRealtimeImage_()),this,SLOT(updateRealtimeImage()));
     connect(this,SIGNAL(updateRealtimePointCloud_()),this,SLOT(updateRealtimePointCloud()));
 }
@@ -58,10 +58,10 @@ void Calibration::pickCallback(const PointPickingEvent &event)
     event.getPoint(x,y,z);
     pcl::PointXYZ origin(x,y,z);
     int index=ui->tabPointCloud->currentIndex()-1;
-    cout<<"the origin of the "<<index<<"th pointcloud's chessboard is:"<<x<<"    "<<y<<"     "<<z<<endl;
-    cout<<vecPointCloud.at(index).width<<" "<<vecPointCloud.at(index).height<<endl;
+    if(index<0)
+        return;
 
-    double threshold=ui->doubleSpinBoxCalibrationboardSquareSize->value()/100.0/2.0
+    double threshold=ui->doubleSpinBoxCalibrationboardSquareSize->value()/1000.0
             *min(ui->spinBoxCalibrationboardHeight->value(),ui->spinBoxCalibrationBoardWidth->value());
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr board(new pcl::PointCloud<pcl::PointXYZI>);
@@ -70,16 +70,11 @@ void Calibration::pickCallback(const PointPickingEvent &event)
         if(sqrt(pow((x-it->x),2)+pow((y-it->y),2)+pow((z-it->z),2))<threshold)
         {
             board->push_back(*it);
-//            it->intensity=255;
         }
     }
 
-//    PointCloudColorHandlerGenericField<PointXYZI> *color_handler;
-//    color_handler = new PointCloudColorHandlerGenericField<PointXYZI> ("intensity");
-//    color_handler->setInputCloud(vecPointCloud.at(index));
-//    if (!viewer->updatePointCloud (vecPointCloud.at(index), *color_handler, "cloud"))
-//        viewer->addPointCloud (vecPointCloud.at(index), *color_handler, "cloud");
-//    vecVtkViewer.at(index)->update ();
+    if(board->size()==0)
+        return;
 
     pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
     pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
@@ -87,7 +82,7 @@ void Calibration::pickCallback(const PointPickingEvent &event)
     seg.setOptimizeCoefficients (true);
     seg.setModelType (pcl::SACMODEL_PLANE);
     seg.setMethodType (pcl::SAC_RANSAC);
-    seg.setDistanceThreshold (0.01);
+    seg.setDistanceThreshold (0.03);
     seg.setInputCloud (board);
     seg.segment (*inliers, *coefficients);
 
@@ -95,6 +90,40 @@ void Calibration::pickCallback(const PointPickingEvent &event)
     name<<"plane"<<index;
     vecPCLViewer.at(index)->removeShape(name.str());
     vecPCLViewer.at(index)->addPlane(*coefficients,name.str());
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr pOnPlaneCloud(new pcl::PointCloud<pcl::PointXYZI>);
+    for(int i=0;i<inliers->indices.size();i++)
+    {
+        pOnPlaneCloud->push_back(board->points[inliers->indices[i]]);
+    }
+    stringstream pcdfile;
+    pcdfile<<index<<"_.pcd";
+    pcl::io::savePCDFile(pcdfile.str().c_str(),*pOnPlaneCloud);
+
+    ofstream plane(name.str().c_str(),ios::binary);
+    double *point=new double[3*inliers->indices.size()];
+    for(int i=0;i<inliers->indices.size();i++)
+    {
+        point[3*i]=board->points[inliers->indices[i]].x;
+        point[3*i+1]=board->points[inliers->indices[i]].y;
+        point[3*i+2]=board->points[inliers->indices[i]].z;
+    }
+    Mat laserPoint=Mat(inliers->indices.size(),3,CV_64F,point).t();
+    laserPoint=1000*laserPoint;
+    Mat lastrow=Mat::ones(1,laserPoint.cols,CV_64F);
+    laserPoint.push_back(lastrow);
+    if(index+1>vecLaserPoint.size())
+    {
+        vecLaserPoint.resize(index+1);
+        vvecPlane.resize(index+1);
+    }
+    laserPoint.copyTo(vecLaserPoint[index]);
+
+    vvecPlane[index].resize(4);
+    vvecPlane[index][0]=coefficients->values[0];
+    vvecPlane[index][1]=coefficients->values[1];
+    vvecPlane[index][2]=coefficients->values[2];
+    vvecPlane[index][3]=coefficients->values[3]*1000.0;
 }
 
 void Calibration::cloudCallback(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &cloud)
@@ -103,6 +132,80 @@ void Calibration::cloudCallback(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr 
     cloud_ = cloud;
     if(updateWindowFlag)
         emit updateRealtimePointCloud_();
+}
+
+int Calibration::processImageAndPointcloud(cv::Mat &image, PointCloud<pcl::PointXYZI>::ConstPtr pointcloud)
+{
+    static int count=0;
+    cv::Mat grayImg;
+    if(image.type()==CV_8UC3)
+    {
+        cv::cvtColor(image,grayImg,CV_BGR2GRAY);
+    }
+    else if(image.type()==CV_8UC1)
+    {
+        grayImg=image;
+    }
+    else
+    {
+        cerr<<"can not detected original image formate!"<<endl;
+        return -1;
+    }
+    bool found;
+    cv::Size boardSize(ui->spinBoxCalibrationboardHeight->value(),ui->spinBoxCalibrationBoardWidth->value());
+    vector<cv::Point2f> pointbuf;
+    if(ui->rdBtnChessBoard->isChecked())
+        found=findChessboardCorners( grayImg, boardSize, pointbuf,
+                                     CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
+    if(ui->rdBtnCircleGrid->isChecked())
+        found = findCirclesGrid(grayImg, boardSize, pointbuf );
+
+    if(!found)
+    {
+        cerr<<"found no chessboard or circlegrid"<<endl;
+        return -1;
+    }
+    vecImg.push_back(image);
+
+    QLabel *lblImg=new QLabel;
+
+    cv::Mat rgbImage;
+    cv::cvtColor(image,rgbImage,CV_BGR2RGB);
+
+    QImage tmpImg=QImage((const unsigned char*)(rgbImage.data),rgbImage.cols,rgbImage.rows,QImage::Format_RGB888);
+    QImage scaledImg=tmpImg.scaled(ui->realTimeDisplay->width(),ui->realTimeDisplay->height());
+    lblImg->setPixmap(QPixmap::fromImage(scaledImg));
+    stringstream tabname;
+    tabname<<count;
+    ui->tabImg->addTab(lblImg,tabname.str().c_str());
+
+    if(ui->rdBtnCamVel->isChecked())
+    {
+        boost::shared_ptr<QVTKWidget> vtkViewer;
+        boost::shared_ptr<pcl::visualization::PCLVisualizer> newViewer;
+        vtkViewer.reset(new QVTKWidget());
+        newViewer.reset (new pcl::visualization::PCLVisualizer (tabname.str().c_str(), false));
+        vtkViewer->SetRenderWindow (newViewer->getRenderWindow());
+        newViewer->setupInteractor (vtkViewer->GetInteractor (),vtkViewer->GetRenderWindow ());
+
+        boost::function<void (const pcl::visualization::PointPickingEvent&)> pickFun;
+        pickFun=boost::bind(&Calibration::pickCallback,this,_1);
+        newViewer->registerPointPickingCallback(pickFun);
+        ui->tabPointCloud->addTab(vtkViewer.get(),tabname.str().c_str());
+        newViewer->addCoordinateSystem (1.0, "global");
+
+        color_handler->setInputCloud(pointcloud);
+        if (!newViewer->updatePointCloud (pointcloud, *color_handler, "cloud"))
+            newViewer->addPointCloud (pointcloud, *color_handler, "cloud");
+        vtkViewer->update ();
+        vecVtkViewer.push_back(vtkViewer);
+        vecPCLViewer.push_back(newViewer);
+        pcl::PointCloud<pcl::PointXYZI> tmpcloud;
+        tmpcloud=*pointcloud;
+        vecPointCloud.push_back(tmpcloud);
+    }
+    ++count;
+    return 0;
 }
 
 void Calibration::updateRealtimeImage()
@@ -157,207 +260,133 @@ void Calibration::imgThreadFun()
 void Calibration::on_btnCapture_clicked()
 {
     static int count=0;
-    updateWindowFlag=false;
-    imgThread.join();
-    cv::Mat grayImg;
-    if(img.format()==QImage::Format_RGB888)
+    if(count==0)
     {
-        cv::Mat rgbImg=cv::Mat(img.height(),img.width(),CV_8UC3,img.bits());
-        cv::cvtColor(rgbImg,grayImg,CV_RGB2GRAY);
-    }
-    else if(img.format()==QImage::Format_Mono)
-    {
-        grayImg=cv::Mat(img.height(),img.width(),CV_8UC1,img.bits());
+        imgHeight=img.height();
+        imgWidth=img.width();
     }
     else
     {
-        cerr<<"can not detected original image formate!"<<endl;
-        return;
+        if((imgHeight!=img.height())||(imgWidth!=img.width()))
+        {
+            cerr<<"there is something wrong with image size!"<<endl;
+            return;
+        }
     }
-    bool found;
-    cv::Size boardSize(ui->spinBoxCalibrationboardHeight->value(),ui->spinBoxCalibrationBoardWidth->value());
-    vector<cv::Point2f> pointbuf;
-    if(ui->rdBtnChessBoard->isChecked())
-        found=findChessboardCorners( grayImg, boardSize, pointbuf,
-                                     CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-    if(ui->rdBtnCircleGrid->isChecked())
-        found = findCirclesGrid(grayImg, boardSize, pointbuf );
+    updateWindowFlag=false;
+    imgThread.join();
 
-    if(!found)
+    cv::Mat image;
+    if(img.format()==QImage::Format_RGB888)
     {
-        cerr<<"found no chessboard or circlegrid"<<endl;
-        updateWindowFlag=true;
-        imgThread=boost::thread(imgFun);
-        return;
+        cv::Mat rgbimage=cv::Mat(img.height(),img.width(),CV_8UC3,img.bits());
+        cv::cvtColor(rgbimage,image,CV_RGB2BGR);
     }
-
-    if(ui->rdBtnChessBoard->isChecked() && found)
-        cornerSubPix(grayImg, pointbuf, cv::Size(11,11),cv::Size(-1,-1), cv::TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
-    imagePoints.push_back(pointbuf);
-    QLabel *lblImg=new QLabel;
-    QImage scaledImg=img.scaled(ui->realTimeDisplay->width(),ui->realTimeDisplay->height());
-    lblImg->setPixmap(QPixmap::fromImage(scaledImg));
-    stringstream tabname;
-    tabname<<count;
-    ui->tabImg->addTab(lblImg,tabname.str().c_str());
-
-    if(ui->rdBtnCamVel->isChecked())
+    else if(img.format()==QImage::Format_Mono)
     {
-        boost::shared_ptr<QVTKWidget> vtkViewer;
-        boost::shared_ptr<pcl::visualization::PCLVisualizer> newViewer;
-        vtkViewer.reset(new QVTKWidget());
-        newViewer.reset (new pcl::visualization::PCLVisualizer (tabname.str().c_str(), false));
-        vtkViewer->SetRenderWindow (newViewer->getRenderWindow());
-        newViewer->setupInteractor (vtkViewer->GetInteractor (),vtkViewer->GetRenderWindow ());
-
-        boost::function<void (const pcl::visualization::PointPickingEvent&)> pickFun;
-        pickFun=boost::bind(&Calibration::pickCallback,this,_1);
-        newViewer->registerPointPickingCallback(pickFun);
-        ui->tabPointCloud->addTab(vtkViewer.get(),tabname.str().c_str());
-        newViewer->addCoordinateSystem (1.0, "global");
-
-        if (!newViewer->updatePointCloud (cloud, *color_handler, "cloud"))
-            newViewer->addPointCloud (cloud, *color_handler, "cloud");
-        vtkViewer->update ();
-        vecVtkViewer.push_back(vtkViewer);
-        vecPCLViewer.push_back(newViewer);
-        pcl::PointCloud<pcl::PointXYZI> tmpcloud;
-        tmpcloud=*cloud;
-        vecPointCloud.push_back(tmpcloud);
+        image=cv::Mat(img.height(),img.width(),CV_8UC1,img.bits());
+    }
+    if(0==processImageAndPointcloud(image,cloud))
+    {
+        stringstream filename;
+        filename<<"image"<<count<<".jpg";
+        cv::imwrite(filename.str().c_str(),image);
+        filename.str("");
+        filename<<"velodyne"<<count<<".pcd";
+        pcl::io::savePCDFile(filename.str().c_str(),*cloud);
+        ++count;
     }
 
-    ++count;
     updateWindowFlag=true;
     imgThread=boost::thread(imgFun);
 }
 
-
-
 void Calibration::on_btnCalibration_clicked()
 {
-    if(imagePoints.size()<10)
+    if(vecLaserPoint.size()<10)
     {
         cerr<<"not enough images,at least 10 images needed"<<endl;
         return;
     }
-
-    cv::Size imageSize(img.height(),img.width());
-    cv::Mat cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
-    int flags;
-    if(ui->radioButtonFixAspectRatio->isChecked())
-    {
-        flags |= CV_CALIB_FIX_ASPECT_RATIO;
-        cameraMatrix.at<double>(0,0) = ui->doubleSpinBoxAspectRatio->value();
-    }
-
-    cv::Mat distCoeffs = cv::Mat::zeros(8, 1, CV_64F);
-
-    vector<vector<cv::Point3f> > objectPoints(1);
+    cv::Mat rVecL,tVecL,RVecL;
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
     cv::Size boardSize(ui->spinBoxCalibrationboardHeight->value(),ui->spinBoxCalibrationBoardWidth->value());
-    float squareSize=(float)ui->doubleSpinBoxCalibrationboardSquareSize->value();
-    objectPoints[0].resize(0);
-    for( int i = 0; i < boardSize.height; i++ )
-        for( int j = 0; j < boardSize.width; j++ )
-            objectPoints[0].push_back(cv::Point3f(float(j*squareSize),
-                                                  float(i*squareSize), 0));
-    objectPoints.resize(imagePoints.size(),objectPoints[0]);
+    float squareSize=ui->doubleSpinBoxCalibrationboardSquareSize->value();
+    calibration(vecImg,vecLaserPoint,vvecPlane,boardSize,squareSize,cameraMatrix,distCoeffs,rVecL,tVecL);
+    cv::Rodrigues(rVecL,RVecL);
 
-    double rms = cv::calibrateCamera(objectPoints, imagePoints, imageSize, cameraMatrix,
-                                     distCoeffs, rvecs, tvecs, flags|CV_CALIB_FIX_K4|CV_CALIB_FIX_K5);
-    ///*|CV_CALIB_FIX_K3*/|CV_CALIB_FIX_K4|CV_CALIB_FIX_K5);
-    printf("RMS error reported by calibrateCamera: %g\n", rms);
+    double *ptr;
+    CV_Assert(cameraMatrix.isContinuous());
+    ptr=(double*)cameraMatrix.data;
+    cout<<"camera matrix:"<<endl;
+    cout<<ptr[0]<<"\t"<<ptr[1]<<"\t"<<ptr[2]<<endl
+               <<ptr[3]<<"\t"<<ptr[4]<<"\t"<<ptr[5]<<endl
+              <<ptr[6]<<"\t"<<ptr[7]<<"\t"<<ptr[8]<<endl<<endl;
 
-    bool ok = checkRange(cameraMatrix) && checkRange(distCoeffs);
+    CV_Assert(distCoeffs.isContinuous());
+    ptr=(double*)distCoeffs.data;
+    cout<<"distCoeffs matrix:"<<endl;
+    cout<<ptr[0]<<endl
+               <<ptr[1]<<endl
+              <<ptr[2]<<endl
+             <<ptr[3]<<endl
+            <<ptr[4]<<endl<<endl;
 
-    vector<cv::Point2f> imagePoints2;
-    int i, totalPoints = 0;
-    double totalErr = 0, err;
-    reprojErrs.resize(objectPoints.size());
-    for( i = 0; i < (int)objectPoints.size(); i++ )
-    {
-        cv::projectPoints(cv::Mat(objectPoints[i]), rvecs[i], tvecs[i],
-                          cameraMatrix, distCoeffs, imagePoints2);
-        err = cv::norm(cv::Mat(imagePoints[i]), cv::Mat(imagePoints2), CV_L2);
-        int n = (int)objectPoints[i].size();
-        reprojErrs[i] = (float)std::sqrt(err*err/n);
-        totalErr += err*err;
-        totalPoints += n;
-    }
-    double totalAvgErr = std::sqrt(totalErr/totalPoints);
+    CV_Assert(RVecL.isContinuous());
+    ptr=(double*)RVecL.data;
+    cout<<"lidar to camera roate matrix:"<<endl;
+    cout<<ptr[0]<<"\t"<<ptr[1]<<"\t"<<ptr[2]<<endl
+               <<ptr[3]<<"\t"<<ptr[4]<<"\t"<<ptr[5]<<endl
+              <<ptr[6]<<"\t"<<ptr[7]<<"\t"<<ptr[8]<<endl<<endl;
+    CV_Assert(tVecL.isContinuous());
 
-    cv::FileStorage fs("result", cv::FileStorage::WRITE );
-    time_t tt;
-    time( &tt );
-    struct tm *t2 = localtime( &tt );
-    char buf[1024];
-    strftime(buf, sizeof(buf)-1, "%c", t2 );
-
-    fs << "calibration_time" << buf;
-
-    if( !rvecs.empty() || !reprojErrs.empty() )
-        fs << "nframes" << (int)std::max(rvecs.size(), reprojErrs.size());
-    fs << "image_width" << imageSize.width;
-    fs << "image_height" << imageSize.height;
-    fs << "board_width" << boardSize.width;
-    fs << "board_height" << boardSize.height;
-    fs << "square_size" << squareSize;
-
-    if( flags & CV_CALIB_FIX_ASPECT_RATIO )
-        fs << "aspectRatio" << ui->doubleSpinBoxAspectRatio->value();
-
-    if( flags != 0 )
-    {
-        sprintf( buf, "flags: %s%s%s%s",
-                 flags & CV_CALIB_USE_INTRINSIC_GUESS ? "+use_intrinsic_guess" : "",
-                 flags & CV_CALIB_FIX_ASPECT_RATIO ? "+fix_aspectRatio" : "",
-                 flags & CV_CALIB_FIX_PRINCIPAL_POINT ? "+fix_principal_point" : "",
-                 flags & CV_CALIB_ZERO_TANGENT_DIST ? "+zero_tangent_dist" : "" );
-        cvWriteComment( *fs, buf, 0 );
-    }
-
-    fs << "flags" << flags;
-
-    fs << "camera_matrix" << cameraMatrix;
-    fs << "distortion_coefficients" << distCoeffs;
-
-    fs << "avg_reprojection_error" << totalAvgErr;
-    if( !reprojErrs.empty() )
-        fs << "per_view_reprojection_errors" << cv::Mat(reprojErrs);
-
-    if( !rvecs.empty() && !tvecs.empty() )
-    {
-        CV_Assert(rvecs[0].type() == tvecs[0].type());
-        cv::Mat bigmat((int)rvecs.size(), 6, rvecs[0].type());
-        for( int i = 0; i < (int)rvecs.size(); i++ )
-        {
-            cv::Mat r = bigmat(cv::Range(i, i+1), cv::Range(0,3));
-            cv::Mat t = bigmat(cv::Range(i, i+1), cv::Range(3,6));
-
-            CV_Assert(rvecs[i].rows == 3 && rvecs[i].cols == 1);
-            CV_Assert(tvecs[i].rows == 3 && tvecs[i].cols == 1);
-            //*.t() is MatExpr (not Mat) so we can use assignment operator
-            r = rvecs[i].t();
-            t = tvecs[i].t();
-        }
-        cvWriteComment( *fs, "a set of 6-tuples (rotation vector + translation vector) for each view", 0 );
-        fs << "extrinsic_parameters" << bigmat;
-    }
-
-    if( !imagePoints.empty() )
-    {
-        cv::Mat imagePtMat((int)imagePoints.size(), (int)imagePoints[0].size(), CV_32FC2);
-        for( int i = 0; i < (int)imagePoints.size(); i++ )
-        {
-            cv::Mat r = imagePtMat.row(i).reshape(2, imagePtMat.cols);
-            cv::Mat imgpti(imagePoints[i]);
-            imgpti.copyTo(r);
-        }
-        fs << "image_points" << imagePtMat;
-    }
-    return;
+    ptr=(double*)tVecL.data;
+    cout<<"lidar to camera translation vector:"<<endl;
+    cout<<ptr[0]<<endl
+               <<ptr[1]<<endl
+              <<ptr[2]<<endl<<endl;
 }
 
 void Calibration::on_radioButtonFixAspectRatio_clicked()
 {
     ui->doubleSpinBoxAspectRatio->setVisible(ui->radioButtonFixAspectRatio->isChecked());
+}
+
+void Calibration::on_btnLoad_clicked()
+{
+    int count=0;
+    cv::Mat image;
+    while(1)
+    {
+        stringstream filename;
+        filename<<"image"<<count<<".jpg";
+        image=cv::imread(filename.str().c_str());
+
+        if(image.empty())
+            break;
+        if(count==0)
+        {
+            imgHeight=image.rows;
+            imgWidth=image.cols;
+        }
+        else
+        {
+            if((imgHeight!=image.rows)||(imgWidth!=image.cols))
+            {
+                cerr<<"there is something wrong with image size!"<<endl;
+                return;
+            }
+        }
+
+        filename.str("");
+        filename<<"velodyne"<<count<<".pcd";
+        pcl::PointCloud<pcl::PointXYZI>::Ptr pointcloud (new pcl::PointCloud<pcl::PointXYZI>);
+        if(0!=pcl::io::loadPCDFile(filename.str().c_str(), *pointcloud))
+        {
+            break;
+        };
+        processImageAndPointcloud(image,pointcloud);
+        ++count;
+    }
 }

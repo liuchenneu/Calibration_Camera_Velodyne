@@ -41,22 +41,22 @@ class Calibration;
 class Calibration : public QMainWindow
 {
     Q_OBJECT
-
 public:
     explicit Calibration(int argc,char** argv,QWidget *parent = 0);
     ~Calibration();
 private:
     void pickCallback(const pcl::visualization::PointPickingEvent& event);
     void cloudCallback (const PointCloud<PointXYZI>::ConstPtr& cloud);
+    int processImageAndPointcloud(cv::Mat &image,pcl::PointCloud<PointXYZI>::ConstPtr pointcloud);
     void imgThreadFun();
 
 private:
     Ui::Calibration *ui;
     PointGreyCamera *camera;
 
-    vector<vector<cv::Point2f> > imagePoints;
-
     bool updateWindowFlag;
+    int imgHeight;
+    int imgWidth;
     QImage img;
 
     vector<cv::Mat> rvecs;
@@ -73,7 +73,9 @@ private:
     vector<boost::shared_ptr<pcl::visualization::PCLVisualizer> >vecPCLViewer;
     PointCloudColorHandlerGenericField<PointXYZI> *color_handler;
     VLPGrabber grabber;
-
+    vector<vector<float> >vvecPlane;
+    vector<cv::Mat >vecLaserPoint;
+    vector<cv::Mat >vecImg;
 
     boost::function0<void> imgFun;
     boost::thread imgThread;
@@ -88,6 +90,7 @@ private slots:
     void on_btnCapture_clicked();
     void on_btnCalibration_clicked();
     void on_radioButtonFixAspectRatio_clicked();
+    void on_btnLoad_clicked();
 };
 
 #endif // CALIBRATION_H

@@ -33,10 +33,10 @@ find_package(VTK COMPONENTS
   vtkIOGeometry
   vtkRenderingLOD
 )
-include(${VTK_USE_FILE})
-if("${VTK_QT_VERSION}" STREQUAL "")
-  message(FATAL_ERROR "VTK was not built with Qt")
-endif()
+#include(${VTK_USE_FILE})
+#if("${VTK_QT_VERSION}" STREQUAL "")
+#  message(FATAL_ERROR "VTK was not built with Qt")
+#endif()
 
 
 include_directories(
@@ -45,8 +45,8 @@ include_directories(
 )
 
 # Set your files and resources here
-set( Srcs Calibration.cpp main.cpp pointgreycamera.cpp)
-set( Hdrs Calibration.h pointgreycamera.h simplevlpviewer.hpp)
+set( Srcs Calibration.cpp main.cpp pointgreycamera.cpp calibrateExtrinsic.cpp)
+set( Hdrs Calibration.h pointgreycamera.h simplevlpviewer.hpp calibrateExtrinsic.h)
 set( MOC_Hdrs Calibration.h)
 set( UIs Calibration.ui)
 # Instruct CMake to run moc automatically when needed.
