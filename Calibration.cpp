@@ -96,11 +96,7 @@ void Calibration::pickCallback(const PointPickingEvent &event)
     {
         pOnPlaneCloud->push_back(board->points[inliers->indices[i]]);
     }
-    stringstream pcdfile;
-    pcdfile<<index<<"_.pcd";
-    pcl::io::savePCDFile(pcdfile.str().c_str(),*pOnPlaneCloud);
 
-    ofstream plane(name.str().c_str(),ios::binary);
     double *point=new double[3*inliers->indices.size()];
     for(int i=0;i<inliers->indices.size();i++)
     {
@@ -315,6 +311,12 @@ void Calibration::on_btnCalibration_clicked()
     float squareSize=ui->doubleSpinBoxCalibrationboardSquareSize->value();
     calibration(vecImg,vecLaserPoint,vvecPlane,boardSize,squareSize,cameraMatrix,distCoeffs,rVecL,tVecL);
     cv::Rodrigues(rVecL,RVecL);
+
+    cv::FileStorage result("camera_conf.yml",FileStorage::WRITE);
+    result<<"Camera_Matrix"<<cameraMatrix;
+    result<<"Distortion_Coefficients"<<distCoeffs;
+    result<<"Extrinic_Matrix_roate"<<rVecL;
+    result<<"Extrinic_Matrix_trans"<<tVecL;
 
     double *ptr;
     CV_Assert(cameraMatrix.isContinuous());

@@ -16,14 +16,14 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/hdl_grabber.h>
 #include <pcl/io/vlp_grabber.h>
-#include <pcl/visualization/pcl_visualizer.h>
+//#include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/console/parse.h>
 #include <pcl/registration/icp.h>
 #include <pcl/registration/icp_nl.h>
 #include <pcl/registration/transforms.h>
-#include <pcl/visualization/boost.h>
-#include <pcl/visualization/mouse_event.h>
+//#include <pcl/visualization/boost.h>
+//#include <pcl/visualization/mouse_event.h>
 //VTK
 #include <vtkRenderWindow.h>
 //Boost

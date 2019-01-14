@@ -2,7 +2,7 @@ project(Calibration_Camera_Velodyne)
 cmake_minimum_required(VERSION 2.8)
 
 set(OpenCV_DIR /usr/local/share/OpenCV)
-set(VTK_DIR /usr/local/lib/cmake/vtk-7.0/)
+set(VTK_DIR /usr/local/lib/cmake/vtk-7.1/)
 set(Qt5_DIR /opt/Qt5.4.2/5.4/gcc_64/lib/cmake/Qt5)
 set(Qt5core_DIR /opt/Qt5.4.2/5.4/gcc_64/lib/cmake/Qt5Core)
 set(PCL_DIR /usr/local/share/pcl-1.8)

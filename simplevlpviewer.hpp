@@ -8,7 +8,6 @@
 #include <pcl/io/hdl_grabber.h>
 #include <pcl/io/vlp_grabber.h>
 #include <pcl/visualization/pcl_visualizer.h>
-#include <pcl/io/openni_camera/openni_driver.h>
 #include <pcl/console/parse.h>
 #include <pcl/visualization/boost.h>
 #include <pcl/visualization/mouse_event.h>
